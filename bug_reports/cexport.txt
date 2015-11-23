@@ -1,0 +1,57 @@
+# C interface for Exporter cannot get format descriptions
+## https://github.com/assimp/assimp/issues/693
+
+The C interface for Exporter has a bug. The function `aiGetExportFormatDescription( index )` performs `Exporter().GetExportFormatDescription( index )`. However, this returns temporary memory. Attempting to access the returned `aiExportFormatDesc` results in a segfault. The solution is either to return a pointer to the global array of `aiExportFormatDesc` or to return a copy of the `aiExportFormatDesc` struct with a corresponding free function.
+
+The following fails:
+
+```
+// brew install assimp
+// cc cexport_bug.c -o cexport_bug -I/usr/local/include -L/usr/local/lib -lassimp
+
+#include <stdio.h>
+#include <assimp/cexport.h>
+
+int main( int argc, char* argv[] ) {
+    // Get the count
+    const size_t count = aiGetExportFormatCount();
+    for( size_t i = 0; i < count; ++i )
+    {
+        // Get the description.
+        const struct aiExportFormatDesc* desc = aiGetExportFormatDescription( i );
+        
+        // desc points to free'd memory. The following crashes or prints garbage.
+        printf( "%s: %s (id: %s)\n", desc->fileExtension, desc->description, desc->id );
+    }
+    
+    return 0;
+}
+```
+
+The following works:
+
+```
+// brew install assimp
+// c++ cexport_works.c -o cexport_works -I/usr/local/include -L/usr/local/lib -lassimp
+
+#include <stdio.h>
+#include <assimp/Exporter.hpp>
+
+int main( int argc, char* argv[] ) {
+    // Allocate an Exporter.
+    Assimp::Exporter exporter;
+    
+    // Get the count
+    const size_t count = exporter.GetExportFormatCount();
+    for( size_t i = 0; i < count; ++i )
+    {
+        // Get the description.
+        const aiExportFormatDesc* desc = exporter.GetExportFormatDescription( i );
+        
+        // desc does not point to free'd memory. The following works.
+        printf( "%s: %s (id: %s)\n", desc->fileExtension, desc->description, desc->id );
+    }
+    
+    return 0;
+}
+```
