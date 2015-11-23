@@ -1,5 +1,7 @@
 // c++ converter.cpp -o converter -I/usr/local/include -L/usr/local/lib -lassimp -g -Wall
 
+#define SAVE_RIG 1
+
 #include <iostream>
 #include <fstream>
 #include <algorithm> // pair
@@ -104,6 +106,49 @@ const char* IdFromExtension( const std::string& extension )
     return nullptr;
 }
 
+#if SAVE_RIG
+void save_rig( const aiMesh* mesh )
+{
+    // Iterate over the bones of the mesh.
+    for( int bone_index = 0; bone_index < mesh->mNumBones; ++bone_index ) {
+        const aiBone* bone = mesh->mBones[ bone_index ];
+        
+        // Save the vertex weights for the bone.
+        // Lookup the index for the bone by its name.
+    }
+}
+
+void save_rig( const aiScene* scene )
+{
+    printf( "# Saving the rig.\n" );
+    
+    // TODO: Save the bones. There should be some kind of nodes with their
+    //       names and positions. (We might also need the offsetmatrix from the bone itself).
+    //       Store a map of name to index.
+    //       See (maybe): http://ogldev.atspace.co.uk/www/tutorial38/tutorial38.html
+    /*
+import pyassimp
+filename = '/Users/yotam/Work/ext/three.js/examples/models/collada/monster/monster.dae'
+scene = pyassimp.load( filename )
+spaces = 0
+def recurse( node ):
+    global spaces
+    print (' '*spaces), node.name #, node.transformation
+    spaces += 1
+    for child in node.children: recurse( child )
+    spaces -= 1
+
+recurse( scene.rootnode )
+    */
+    
+    // Meshes have bones. Iterate over meshes.
+    for( int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index ) {
+        printf( "Mesh %d\n", mesh_index );
+        save_rig( scene->mMeshes[ mesh_index ] )
+    }
+}
+#endif
+
 void usage( const char* argv0, std::ostream& out )
 {
     out << "Usage: " << argv0 << " path/to/input path/to/output" << std::endl;
@@ -166,6 +211,11 @@ int main( int argc, char* argv[] )
         std::cerr << "ERROR: Could not save the scene: " << ( (aiReturn_OUTOFMEMORY == result) ? "Out of memory" : "Unknown reason" ) << std::endl;
     }
     std::cout << "Saved: " << outpath << std::endl;
+    
+#if SAVE_RIG
+    /// Save the rig.
+    save_rig( scene );
+#endif
     
     // Cleanup.
     aiReleaseImport( scene );
