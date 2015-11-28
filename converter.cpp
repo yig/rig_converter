@@ -122,7 +122,7 @@ void save_rig( const aiMesh* mesh )
 }
 
 aiMatrix4x4 FilterNodeTransformation( const aiMatrix4x4& transformation ) {
-    return transformation;
+    // return transformation;
     
     // Decompose the transformation matrix into translation, rotation, and scaling.
     aiVector3D scaling, translation_vector;
@@ -145,7 +145,8 @@ void recurse( const aiNode* node, const aiMatrix4x4& parent_transformation, Stri
     assert( node );
     assert( name2transformation.find( node->mName.C_Str() ) == name2transformation.end() );
     
-    const aiMatrix4x4 node_transformation = FilterNodeTransformation( node->mTransformation );
+    aiMatrix4x4 node_transformation = FilterNodeTransformation( node->mTransformation );
+    // node_transformation.Transpose();
     const aiMatrix4x4 transformation_so_far = parent_transformation * node_transformation;
     
     name2transformation[ node->mName.C_Str() ] = transformation_so_far;
