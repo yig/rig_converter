@@ -1,10 +1,11 @@
-// c++ converter.cpp -o converter -I/usr/local/include -L/usr/local/lib -lassimp -g -Wall
+// c++ -std=c++11 converter.cpp -o converter -I/usr/local/include -L/usr/local/lib -lassimp -g -Wall
 
 #define SAVE_RIG 1
 
 #include <iostream>
 #include <fstream>
 #include <algorithm> // pair
+#include <unordered_map>
 #include <cassert>
 
 #include <assimp/Exporter.hpp>
@@ -109,6 +110,8 @@ const char* IdFromExtension( const std::string& extension )
 #if SAVE_RIG
 void save_rig( const aiMesh* mesh )
 {
+    assert( mesh );
+    
     // Iterate over the bones of the mesh.
     for( int bone_index = 0; bone_index < mesh->mNumBones; ++bone_index ) {
         const aiBone* bone = mesh->mBones[ bone_index ];
@@ -118,9 +121,64 @@ void save_rig( const aiMesh* mesh )
     }
 }
 
+aiMatrix4x4 FilterNodeTransformation( const aiMatrix4x4& transformation ) {
+    return transformation;
+    
+    // Decompose the transformation matrix into translation, rotation, and scaling.
+    aiVector3D scaling, translation_vector;
+    aiQuaternion rotation;
+    transformation.Decompose( scaling, rotation, translation_vector );
+    rotation.Normalize();
+    
+    // Convert the translation into a matrix.
+    aiMatrix4x4 translation_matrix;
+    aiMatrix4x4::Translation( translation_vector, translation_matrix );
+    
+    // Keep the rotation times the translation.
+    aiMatrix4x4 keep( aiMatrix4x4( rotation.GetMatrix() ) * translation_matrix );
+    return keep;
+}
+
+typedef std::unordered_map< std::string, aiMatrix4x4 > StringToMatrix4x4;
+// typedef std::unordered_map< std::string, std::string > StringToString;
+void recurse( const aiNode* node, const aiMatrix4x4& parent_transformation, StringToMatrix4x4& name2transformation ) {
+    assert( node );
+    assert( name2transformation.find( node->mName.C_Str() ) == name2transformation.end() );
+    
+    const aiMatrix4x4 node_transformation = FilterNodeTransformation( node->mTransformation );
+    const aiMatrix4x4 transformation_so_far = parent_transformation * node_transformation;
+    
+    name2transformation[ node->mName.C_Str() ] = transformation_so_far;
+    
+    for( int child_index = 0; child_index < node->mNumChildren; ++child_index ) {
+        recurse( node->mChildren[ child_index ], transformation_so_far, name2transformation );
+    }
+}
+void print( const StringToMatrix4x4& name2transformation ) {
+    for( const auto& iter : name2transformation ) {
+        std::cout << iter.first << ":\n";
+        
+        std::cout << ' ' << iter.second.a1 << ' ' << iter.second.a2 << ' ' << iter.second.a3 << ' ' << iter.second.a4 << '\n';
+        std::cout << ' ' << iter.second.b1 << ' ' << iter.second.b2 << ' ' << iter.second.b3 << ' ' << iter.second.b4 << '\n';
+        std::cout << ' ' << iter.second.c1 << ' ' << iter.second.c2 << ' ' << iter.second.c3 << ' ' << iter.second.c4 << '\n';
+        std::cout << ' ' << iter.second.d1 << ' ' << iter.second.d2 << ' ' << iter.second.d3 << ' ' << iter.second.d4 << '\n';
+    }
+}
+
 void save_rig( const aiScene* scene )
 {
     printf( "# Saving the rig.\n" );
+    
+    assert( scene );
+    assert( scene->mRootNode );
+    
+    StringToMatrix4x4 node2transformation;
+    const aiMatrix4x4 I;
+    recurse( scene->mRootNode, I, node2transformation );
+    print( node2transformation );
+    
+    /// 1 Find the immediate parent of each bone
+    
     
     // TODO: Save the bones. There should be some kind of nodes with their
     //       names and positions. (We might also need the offsetmatrix from the bone itself).
@@ -144,7 +202,7 @@ recurse( scene.rootnode )
     // Meshes have bones. Iterate over meshes.
     for( int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index ) {
         printf( "Mesh %d\n", mesh_index );
-        save_rig( scene->mMeshes[ mesh_index ] )
+        save_rig( scene->mMeshes[ mesh_index ] );
     }
 }
 #endif
