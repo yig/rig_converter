@@ -204,7 +204,10 @@ void save_rig( const aiScene* scene )
     assert( scene->mRootNode );
     
     StringToMatrix4x4 node2transformation, node2offset, name2offset_skelmeshbuilder;
-    /// WHY WHY WHY WHY WHY
+    /// Q: WHY WHY WHY WHY WHY
+    /// A: Because on MD5Loader.cpp:190 the root node's transformation is set to the
+    ///    inverse of this, because:
+    ///    "// Now rotate the whole scene 90 degrees around the x axis to match our internal coordinate system"
     const aiMatrix4x4 I( 1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1 );
     recurse( scene->mRootNode, I, node2transformation, node2offset, name2offset_skelmeshbuilder );
     std::cout << "## name2transformation\n";
