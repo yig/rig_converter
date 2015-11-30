@@ -5,9 +5,12 @@
 #define SAVE_RIG 1
 
 #include <iostream>
+#include <iomanip> // setw, setprecision
 #include <fstream>
 #include <algorithm> // pair
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <cassert>
 
 #include <assimp/Exporter.hpp>
@@ -59,7 +62,6 @@ bool os_path_exists( const std::string& name ) {
         return false;
     }   
 }
-}
 
 void print_importers( std::ostream& out )
 {
@@ -109,140 +111,257 @@ const char* IdFromExtension( const std::string& extension )
     return nullptr;
 }
 
+}
+
 #if SAVE_RIG
-
-typedef std::unordered_map< std::string, aiMatrix4x4 > StringToMatrix4x4;
-void print( const aiMatrix4x4& matrix ) {
-    std::cout << ' ' << matrix.a1 << ' ' << matrix.a2 << ' ' << matrix.a3 << ' ' << matrix.a4 << '\n';
-    std::cout << ' ' << matrix.b1 << ' ' << matrix.b2 << ' ' << matrix.b3 << ' ' << matrix.b4 << '\n';
-    std::cout << ' ' << matrix.c1 << ' ' << matrix.c2 << ' ' << matrix.c3 << ' ' << matrix.c4 << '\n';
-    std::cout << ' ' << matrix.d1 << ' ' << matrix.d2 << ' ' << matrix.d3 << ' ' << matrix.d4 << '\n';
-}
-void print( const StringToMatrix4x4& name2matrix ) {
-    for( const auto& iter : name2matrix ) {
-        std::cout << iter.first << ":\n";
-        
-        print( iter.second );
-    }
-}
-
-void save_rig( const aiMesh* mesh )
+namespace
 {
-    assert( mesh );
-    
-    // Iterate over the bones of the mesh.
-    for( int bone_index = 0; bone_index < mesh->mNumBones; ++bone_index ) {
-        const aiBone* bone = mesh->mBones[ bone_index ];
-        
-        // Save the vertex weights for the bone.
-        // Lookup the index for the bone by its name.
-        
-        std::cout << "bone.offset for bone.name: " << bone->mName.C_Str() << std::endl;
-        print( bone->mOffsetMatrix );
-    }
-}
+typedef std::unordered_map< std::string, std::string > StringToString;
+typedef std::unordered_map< std::string, aiVector3D > StringToVector3D;
 
-aiMatrix4x4 FilterNodeTransformation( const aiMatrix4x4& transformation ) {
-    return transformation;
-    
-    // Decompose the transformation matrix into translation, rotation, and scaling.
-    aiVector3D scaling, translation_vector;
-    aiQuaternion rotation;
-    transformation.Decompose( scaling, rotation, translation_vector );
-    // rotation.w *= -1;
-    rotation.Normalize();
-    
-    // Convert the translation into a matrix.
-    aiMatrix4x4 translation_matrix;
-    aiMatrix4x4::Translation( translation_vector, translation_matrix );
-    
-    // Keep the rotation times the translation.
-    aiMatrix4x4 keep( aiMatrix4x4( rotation.GetMatrix() ) * translation_matrix );
-    return keep;
-}
-
-// typedef std::unordered_map< std::string, std::string > StringToString;
-void recurse( const aiNode* node, const aiMatrix4x4& parent_transformation, StringToMatrix4x4& name2transformation, StringToMatrix4x4& name2offset, StringToMatrix4x4& name2offset_skelmeshbuilder ) {
+void recurse( const aiNode* node, const aiMatrix4x4& parent_transformation, StringToVector3D& name2position, StringToString& name2parent ) {
     assert( node );
-    assert( name2transformation.find( node->mName.C_Str() ) == name2transformation.end() );
-    assert( name2offset.find( node->mName.C_Str() ) == name2offset.end() );
-    assert( name2offset_skelmeshbuilder.find( node->mName.C_Str() ) == name2offset_skelmeshbuilder.end() );
-    
     const std::string name( node->mName.C_Str() );
     
-    aiMatrix4x4 node_transformation = FilterNodeTransformation( node->mTransformation );
-    // node_transformation.Transpose();
-    const aiMatrix4x4 transformation_so_far = parent_transformation * node_transformation;
+    // We shouldn't have yet seen the node in any of our output maps.
+    assert( name2position.find( name ) == name2position.end() );
+    assert( name2parent.find( name ) == name2parent.end() );
     
-    name2transformation[ name ] = transformation_so_far;
+    const aiMatrix4x4 transformation_so_far = parent_transformation * node->mTransformation;
     
-    // Make a copy and invert it. That should be the offset matrix.
-    aiMatrix4x4 offset = transformation_so_far;
-    offset.Inverse();
-    name2offset[ name ] = offset;
-    
-    // Calculate the offset matrix the way SkeletonMeshBuilder.cpp:179--182 does.
-    {
-        // calculate the bone offset matrix by concatenating the inverse transformations of all parents
-        aiMatrix4x4 offset_skelmeshbuilder = aiMatrix4x4( node->mTransformation ).Inverse();
-        for( aiNode* parent = node->mParent; parent != NULL; parent = parent->mParent ) {
-            offset_skelmeshbuilder = offset_skelmeshbuilder * aiMatrix4x4( parent->mTransformation ).Inverse();
-        }
-        name2offset_skelmeshbuilder[ name ] = offset_skelmeshbuilder;
-    }
+    name2position[ name ] = aiVector3D( transformation_so_far.a4, transformation_so_far.b4, transformation_so_far.c4 );
+    // The root node will not have a parent.
+    if( nullptr != node->mParent ) name2parent[ name ] = node->mParent->mName.C_Str();
     
     for( int child_index = 0; child_index < node->mNumChildren; ++child_index ) {
-        recurse( node->mChildren[ child_index ], transformation_so_far, name2transformation, name2offset, name2offset_skelmeshbuilder );
+        recurse( node->mChildren[ child_index ], transformation_so_far, name2position, name2parent );
     }
 }
+}
 
-void save_rig( const aiScene* scene )
+void save_rig( const aiScene* scene, std::vector< aiVector3D >& joints_out, std::vector< std::pair< int, int > >& bones_out, std::vector< float >& weights_out )
 {
-    printf( "# Saving the rig.\n" );
+    /*
+    Given an `aiScene*`, fills the output parameters:
+        `joints_out` with all used joints,
+        `bones_out` with pairs of indices (start,end) into `joints_out` corresponding
+            to the start and end of each bone,
+        `weights_out` with an array of weights for each vertex in scene.meshes (flattened)
+            and for each bone in bones: [
+                bone[0]-weight-for-vertex[0]
+                bone[0]-weight-for-vertex[1]
+                bone[0]-weight-for-vertex[2]
+                ...
+                bone[1]-weight-for-vertex[0]
+                bone[1]-weight-for-vertex[1]
+                bone[1]-weight-for-vertex[2]
+                ...
+                ]
+    */
+    
+    printf( "# Extracting the rig.\n" );
     
     assert( scene );
     assert( scene->mRootNode );
-    
-    StringToMatrix4x4 node2transformation, node2offset, name2offset_skelmeshbuilder;
-    /// Q: WHY WHY WHY WHY WHY
-    /// A: Because on MD5Loader.cpp:190 the root node's transformation is set to the
-    ///    inverse of this, because:
-    ///    "// Now rotate the whole scene 90 degrees around the x axis to match our internal coordinate system"
-    const aiMatrix4x4 I( 1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1 );
-    recurse( scene->mRootNode, I, node2transformation, node2offset, name2offset_skelmeshbuilder );
-    std::cout << "## name2transformation\n";
-    print( node2transformation );
-    std::cout << "## name2offset\n";
-    print( node2offset );
-    std::cout << "## name2offset the way SkeletonMeshBuilder does it\n";
-    print( name2offset_skelmeshbuilder );
-    
-    /// 1 Find the immediate parent of each bone
+    // This function doesn't make sense if there aren't any meshes.
+    if( 0 == scene->mNumMeshes ) {
+        std::cerr << "save_rig(): No meshes means no rig to save." << std::endl;
+        return;
+    }
     
     
-    // TODO: Save the bones. There should be some kind of nodes with their
-    //       names and positions. (We might also need the offsetmatrix from the bone itself).
-    //       Store a map of name to index.
-    //       See (maybe): http://ogldev.atspace.co.uk/www/tutorial38/tutorial38.html
-    /*
-import pyassimp
-filename = '/Users/yotam/Work/ext/three.js/examples/models/collada/monster/monster.dae'
-scene = pyassimp.load( filename )
-spaces = 0
-def recurse( node ):
-    global spaces
-    print (' '*spaces), node.name #, node.transformation
-    spaces += 1
-    for child in node.children: recurse( child )
-    spaces -= 1
+    /// 1. Flatten the meshes into a single mesh. Store the index of the first vertex of
+    ///    each mesh (assuming they are stored one after the other; if they're not,
+    ///    I'll extract them myself).
+    /// 2. Recursively traverse from the rootnode and (a) use the transformation matrices
+    ///    to get the position of each joint and (b) store the parent of each joint.
+    ///    These will be maps from joint name to matrix and from joint name to joint
+    ///    parent's name.
+    /// 3. Collect the set of all used bones among all meshes. Mesh bones store the name
+    ///    of the joint on the "end" side of the directed edge. Also collect the set of
+    ///    all used joints (the end joints and the parents of the end joints).
+    /// 4. Save the skeleton bones in a simple format. Save all used joints' positions.
+    ///    Save each bone as pairs of indices (start,end) into all used joints.
+    ///    (libigl has a text file format called TGF that stores this: http://libigl.github.io/libigl/file-formats/ )
+    /// 5. Save the skeleton weight matrix. Each mesh bone stores a sparse map from
+    ///    vertex indices to weights for a small number of bones (as child joint names).
+    ///    (I'll save it as a text file compatible with libigl's DMAT: http://libigl.github.io/libigl/file-formats/ )
+    
+    
+    /// 1
+    // Flattening is taken care of by ASSIMP saving to OBJ.
+    std::vector< int > first_vertex_offsets;
+    int total_vertex_num = 0;
+    first_vertex_offsets.resize( scene->mNumMeshes );
+    // The constructor for ints should set them to zero.
+    assert( 0 == scene->mNumMeshes || 0 == first_vertex_offsets.at(0) );
+    // Each mesh's first vertex comes immediately after the previous mesh's last vertex.
+    // If the mesh's have N, M, and P vertices, then the offsets would be: [ 0, N, N+M ].
+    total_vertex_num = 0;
+    for( int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index ) {
+        first_vertex_offsets.at( mesh_index ) = total_vertex_num;
+        total_vertex_num += scene->mMeshes[ mesh_index ]->mNumVertices;
+    }
+    
+    
+    /// 2
+    StringToString name2parent;
+    StringToVector3D name2position;
+    const aiMatrix4x4 I;
+    recurse( scene->mRootNode, I, name2position, name2parent );
+    // std::cout << "## name2transformation\n";
+    // print( name2transformation );
+    
+    
+    /// 3
+    typedef std::unordered_set< std::string > StringSet;
+    typedef std::vector< std::string > StringVector;
+    
+    StringSet used_bones, used_joints;
+    for( int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index ) {
+        const aiMesh* mesh = scene->mMeshes[ mesh_index ];
+        assert( mesh );
+        
+        // Iterate over the bones of the mesh.
+        for( int bone_index = 0; bone_index < mesh->mNumBones; ++bone_index ) {
+            const aiBone* bone = mesh->mBones[ bone_index ];
+            
+            const std::string bone_end_joint_name = bone->mName.C_Str();
+            used_bones.insert( bone_end_joint_name );
+            used_joints.insert( bone_end_joint_name );
+            // Bones store the end joint name.
+            // The bone must have a start joint that is the end joint's parent.
+            assert( name2parent.find( bone_end_joint_name ) != name2parent.end() );
+            used_joints.insert( name2parent[ bone_end_joint_name ] );
+        }
+    }
+    const StringVector ordered_bones( used_bones.begin(), used_bones.end() );
+    const StringVector ordered_joints( used_joints.begin(), used_joints.end() );
+    
+    
+    /// 4
+    // Save joints_out.
+    joints_out.resize( ordered_joints.size() );
+    // We need a reverse map (index to joint name) for saving bones_out.
+    std::unordered_map< std::string, int > joint_name_to_ordered_joints_index;
+    {
+        int i = 0;
+        for( const auto& name : ordered_joints ) {
+            joints_out.at(i) = name2position[ name ];
+            joint_name_to_ordered_joints_index[ name ] = i;
+            ++i;
+        }
+    }
+    
+    // Save bones_out.
+    bones_out.resize( ordered_bones.size() );
+    {
+        int i = 0;
+        for( const auto& name : ordered_bones ) {
+            bones_out.at(i) = std::make_pair(
+                // start is parent
+                joint_name_to_ordered_joints_index[ name2parent[ name ] ],
+                // end is child
+                joint_name_to_ordered_joints_index[ name ]
+                );
+            ++i;
+        }
+    }
+    
+    
+    /// 5
+    weights_out.assign( total_vertex_num * bones_out.size(), 0.f );
+    for( int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index ) {
+        const aiMesh* mesh = scene->mMeshes[ mesh_index ];
+        assert( mesh );
+        
+        const int first_vertex_offset = first_vertex_offsets.at( mesh_index );
+        
+        // Iterate over the bones of the mesh.
+        for( int bone_index = 0; bone_index < mesh->mNumBones; ++bone_index ) {
+            const aiBone* bone = mesh->mBones[ bone_index ];
+            assert( bone );
+            
+            // Iterate over the corresponding vertex weights of the bone.
+            for( int weight_index = 0; weight_index < bone->mNumWeights; ++weight_index ) {
+                const aiVertexWeight& weight = bone->mWeights[ weight_index ];
+                
+                const int local_vertex_index = weight.mVertexId;
+                assert( local_vertex_index >= 0 );
+                assert( local_vertex_index < mesh->mNumVertices );
+                assert( local_vertex_index + first_vertex_offset < total_vertex_num );
+                
+                weights_out.at( bone_index*total_vertex_num + first_vertex_offset+local_vertex_index ) = weight.mWeight;
+            }
+        }
+    }
+}
 
-recurse( scene.rootnode )
+void save_skeleton_to_TGF( const std::string& filename, const std::vector< aiVector3D >& joints, const std::vector< std::pair< int, int > >& bones ) {
+    /*
+    Saves the given `joints` (positions) and `bones` (pairs of (start,end) indices into joints)
+    to the file named `filename` in TGF format.
+    
+    TGF format: http://libigl.github.io/libigl/file-formats/tgf.html
     */
     
-    // Meshes have bones. Iterate over meshes.
-    for( int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index ) {
-        printf( "Mesh %d\n", mesh_index );
-        save_rig( scene->mMeshes[ mesh_index ] );
+    std::ofstream out( filename );
+    if( !out ) {
+        std::cerr << "save_skeleton_to_TGF(): Unable to open file for writing: " << filename << std::endl;
+        return;
+    }
+    
+    {
+        // TGF is 1-indexed.
+        int i = 1;
+        for( const auto& position : joints ) {
+            // Each line: index x y z
+            out
+                << std::setw( 4 ) << i << ' '
+                // Q: What should setprecision be to not lose any accuracy when printing a double?
+                // A: 17. See: http://stackoverflow.com/questions/554063/how-do-i-print-a-double-value-with-full-precision-using-cout
+                << std::setw( 27 ) << std::setprecision( 17 ) << position.x << ' '
+                << std::setw( 27 ) << std::setprecision( 17 ) << position.y << ' '
+                << std::setw( 27 ) << std::setprecision( 17 ) << position.z << std::endl;
+            ++i;
+        }
+    }
+    
+    out << "#" << std::endl;
+    
+    for( const auto& bone : bones ) {
+        // Each line: start_index end_index is_bone is_pseudo_edge is_cage
+        // TGF is 1-indexed.
+        // The "1 0 0" means that this is a bone edge, and not another kind of edge.
+        out << std::setw( 4 ) << (bone.first + 1) << ' ' << std::setw( 4 ) << (bone.second + 1) << " 1 0 0" << std::endl;
+    }
+}
+
+void save_weights_to_DMAT( const std::string& filename, int rows, int cols, const std::vector< float >& weights ) {
+    /*
+    Saves the given `weights` (column-major matrix) with `rows` and `cols` dimensions
+    to the file named `filename` in DMAT format.
+    
+    DMAT format: http://libigl.github.io/libigl/file-formats/dmat.html
+    */
+    
+    assert( rows > 0 );
+    assert( cols > 0 );
+    assert( rows * cols == weights.size() );
+    
+    std::ofstream out( filename );
+    if( !out ) {
+        std::cerr << "save_weights_to_DMAT(): Unable to open file for writing: " << filename << std::endl;
+        return;
+    }
+    
+    // Save the cols and rows.
+    out << cols << ' ' << rows << std::endl;
+    
+    for( const auto& val : weights ) {
+        // Q: What should setprecision be to not lose any accuracy when printing a double?
+        // A: 17. See: http://stackoverflow.com/questions/554063/how-do-i-print-a-double-value-with-full-precision-using-cout
+        out << std::setprecision( 17 ) << val << std::endl;
     }
 }
 #endif
@@ -312,7 +431,21 @@ int main( int argc, char* argv[] )
     
 #if SAVE_RIG
     /// Save the rig.
-    save_rig( scene );
+    {
+        std::vector< aiVector3D > joints_out;
+        std::vector< std::pair< int, int > > bones_out;
+        std::vector< float > weights_out;
+        save_rig( scene, joints_out, bones_out, weights_out );
+        assert( weights_out.size() % bones_out.size() == 0 );
+        
+        std::string filename = os_path_splitext( outpath ).first + ".tgf";
+        save_skeleton_to_TGF( filename, joints_out, bones_out );
+        std::cout << "Saved: " << filename << std::endl;
+        
+        filename = os_path_splitext( outpath ).first + ".dmat";
+        save_weights_to_DMAT( filename, weights_out.size() / bones_out.size(), bones_out.size(), weights_out );
+        std::cout << "Saved: " << filename << std::endl;
+    }
 #endif
     
     // Cleanup.
