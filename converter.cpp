@@ -1,4 +1,6 @@
 // c++ -std=c++11 converter.cpp -o converter -I/usr/local/include -L/usr/local/lib -lassimp -g -Wall
+/// When debugging, link against my assimp library:
+// c++ -std=c++11 converter.cpp -o converter -I/usr/local/include -L/Users/yotam/Work/ext/assimp/build/code -lassimpd -g -Wall
 
 #define SAVE_RIG 1
 
@@ -147,6 +149,7 @@ aiMatrix4x4 FilterNodeTransformation( const aiMatrix4x4& transformation ) {
     aiVector3D scaling, translation_vector;
     aiQuaternion rotation;
     transformation.Decompose( scaling, rotation, translation_vector );
+    // rotation.w *= -1;
     rotation.Normalize();
     
     // Convert the translation into a matrix.
@@ -201,7 +204,8 @@ void save_rig( const aiScene* scene )
     assert( scene->mRootNode );
     
     StringToMatrix4x4 node2transformation, node2offset, name2offset_skelmeshbuilder;
-    const aiMatrix4x4 I;
+    /// WHY WHY WHY WHY WHY
+    const aiMatrix4x4 I( 1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1 );
     recurse( scene->mRootNode, I, node2transformation, node2offset, name2offset_skelmeshbuilder );
     std::cout << "## name2transformation\n";
     print( node2transformation );

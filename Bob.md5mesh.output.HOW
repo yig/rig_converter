@@ -1,0 +1,4 @@
+./converter ../test/models-nonbsd/MD5/Bob.md5mesh foo.dae > Bob.md5mesh.output
+# Then:
+grep -A 4 pubis Bob.md5mesh.output
+# The first matrix output should be the inverse of the others.
