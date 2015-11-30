@@ -108,6 +108,22 @@ const char* IdFromExtension( const std::string& extension )
 }
 
 #if SAVE_RIG
+
+typedef std::unordered_map< std::string, aiMatrix4x4 > StringToMatrix4x4;
+void print( const aiMatrix4x4& matrix ) {
+    std::cout << ' ' << matrix.a1 << ' ' << matrix.a2 << ' ' << matrix.a3 << ' ' << matrix.a4 << '\n';
+    std::cout << ' ' << matrix.b1 << ' ' << matrix.b2 << ' ' << matrix.b3 << ' ' << matrix.b4 << '\n';
+    std::cout << ' ' << matrix.c1 << ' ' << matrix.c2 << ' ' << matrix.c3 << ' ' << matrix.c4 << '\n';
+    std::cout << ' ' << matrix.d1 << ' ' << matrix.d2 << ' ' << matrix.d3 << ' ' << matrix.d4 << '\n';
+}
+void print( const StringToMatrix4x4& name2matrix ) {
+    for( const auto& iter : name2matrix ) {
+        std::cout << iter.first << ":\n";
+        
+        print( iter.second );
+    }
+}
+
 void save_rig( const aiMesh* mesh )
 {
     assert( mesh );
@@ -118,11 +134,14 @@ void save_rig( const aiMesh* mesh )
         
         // Save the vertex weights for the bone.
         // Lookup the index for the bone by its name.
+        
+        std::cout << "bone.offset for bone.name: " << bone->mName.C_Str() << std::endl;
+        print( bone->mOffsetMatrix );
     }
 }
 
 aiMatrix4x4 FilterNodeTransformation( const aiMatrix4x4& transformation ) {
-    // return transformation;
+    return transformation;
     
     // Decompose the transformation matrix into translation, rotation, and scaling.
     aiVector3D scaling, translation_vector;
@@ -139,30 +158,38 @@ aiMatrix4x4 FilterNodeTransformation( const aiMatrix4x4& transformation ) {
     return keep;
 }
 
-typedef std::unordered_map< std::string, aiMatrix4x4 > StringToMatrix4x4;
 // typedef std::unordered_map< std::string, std::string > StringToString;
-void recurse( const aiNode* node, const aiMatrix4x4& parent_transformation, StringToMatrix4x4& name2transformation ) {
+void recurse( const aiNode* node, const aiMatrix4x4& parent_transformation, StringToMatrix4x4& name2transformation, StringToMatrix4x4& name2offset, StringToMatrix4x4& name2offset_skelmeshbuilder ) {
     assert( node );
     assert( name2transformation.find( node->mName.C_Str() ) == name2transformation.end() );
+    assert( name2offset.find( node->mName.C_Str() ) == name2offset.end() );
+    assert( name2offset_skelmeshbuilder.find( node->mName.C_Str() ) == name2offset_skelmeshbuilder.end() );
+    
+    const std::string name( node->mName.C_Str() );
     
     aiMatrix4x4 node_transformation = FilterNodeTransformation( node->mTransformation );
     // node_transformation.Transpose();
     const aiMatrix4x4 transformation_so_far = parent_transformation * node_transformation;
     
-    name2transformation[ node->mName.C_Str() ] = transformation_so_far;
+    name2transformation[ name ] = transformation_so_far;
+    
+    // Make a copy and invert it. That should be the offset matrix.
+    aiMatrix4x4 offset = transformation_so_far;
+    offset.Inverse();
+    name2offset[ name ] = offset;
+    
+    // Calculate the offset matrix the way SkeletonMeshBuilder.cpp:179--182 does.
+    {
+        // calculate the bone offset matrix by concatenating the inverse transformations of all parents
+        aiMatrix4x4 offset_skelmeshbuilder = aiMatrix4x4( node->mTransformation ).Inverse();
+        for( aiNode* parent = node->mParent; parent != NULL; parent = parent->mParent ) {
+            offset_skelmeshbuilder = offset_skelmeshbuilder * aiMatrix4x4( parent->mTransformation ).Inverse();
+        }
+        name2offset_skelmeshbuilder[ name ] = offset_skelmeshbuilder;
+    }
     
     for( int child_index = 0; child_index < node->mNumChildren; ++child_index ) {
-        recurse( node->mChildren[ child_index ], transformation_so_far, name2transformation );
-    }
-}
-void print( const StringToMatrix4x4& name2transformation ) {
-    for( const auto& iter : name2transformation ) {
-        std::cout << iter.first << ":\n";
-        
-        std::cout << ' ' << iter.second.a1 << ' ' << iter.second.a2 << ' ' << iter.second.a3 << ' ' << iter.second.a4 << '\n';
-        std::cout << ' ' << iter.second.b1 << ' ' << iter.second.b2 << ' ' << iter.second.b3 << ' ' << iter.second.b4 << '\n';
-        std::cout << ' ' << iter.second.c1 << ' ' << iter.second.c2 << ' ' << iter.second.c3 << ' ' << iter.second.c4 << '\n';
-        std::cout << ' ' << iter.second.d1 << ' ' << iter.second.d2 << ' ' << iter.second.d3 << ' ' << iter.second.d4 << '\n';
+        recurse( node->mChildren[ child_index ], transformation_so_far, name2transformation, name2offset, name2offset_skelmeshbuilder );
     }
 }
 
@@ -173,10 +200,15 @@ void save_rig( const aiScene* scene )
     assert( scene );
     assert( scene->mRootNode );
     
-    StringToMatrix4x4 node2transformation;
+    StringToMatrix4x4 node2transformation, node2offset, name2offset_skelmeshbuilder;
     const aiMatrix4x4 I;
-    recurse( scene->mRootNode, I, node2transformation );
+    recurse( scene->mRootNode, I, node2transformation, node2offset, name2offset_skelmeshbuilder );
+    std::cout << "## name2transformation\n";
     print( node2transformation );
+    std::cout << "## name2offset\n";
+    print( node2offset );
+    std::cout << "## name2offset the way SkeletonMeshBuilder does it\n";
+    print( name2offset_skelmeshbuilder );
     
     /// 1 Find the immediate parent of each bone
     
