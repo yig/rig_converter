@@ -320,9 +320,13 @@ void save_skeleton_to_TGF( const std::string& filename, const std::vector< aiVec
                 << std::setw( 4 ) << i << ' '
                 // Q: What should setprecision be to not lose any accuracy when printing a double?
                 // A: 17. See: http://stackoverflow.com/questions/554063/how-do-i-print-a-double-value-with-full-precision-using-cout
+                // Q: Should I use '\n' or endl?
+                // A: '\n'. endl is defined as '\n' plus a flush. The flush slows things
+                //    down and is not needed when outputting to a file.
+                //    Source: http://stackoverflow.com/questions/8689344/portable-end-of-line-newline/8689547#8689547
                 << std::setw( 27 ) << std::setprecision( 17 ) << position.x << ' '
                 << std::setw( 27 ) << std::setprecision( 17 ) << position.y << ' '
-                << std::setw( 27 ) << std::setprecision( 17 ) << position.z << std::endl;
+                << std::setw( 27 ) << std::setprecision( 17 ) << position.z << '\n';
             ++i;
         }
     }
@@ -333,7 +337,7 @@ void save_skeleton_to_TGF( const std::string& filename, const std::vector< aiVec
         // Each line: start_index end_index is_bone is_pseudo_edge is_cage
         // TGF is 1-indexed.
         // The "1 0 0" means that this is a bone edge, and not another kind of edge.
-        out << std::setw( 4 ) << (bone.first + 1) << ' ' << std::setw( 4 ) << (bone.second + 1) << " 1 0 0" << std::endl;
+        out << std::setw( 4 ) << (bone.first + 1) << ' ' << std::setw( 4 ) << (bone.second + 1) << " 1 0 0" << '\n';
     }
 }
 
@@ -356,12 +360,16 @@ void save_weights_to_DMAT( const std::string& filename, int rows, int cols, cons
     }
     
     // Save the cols and rows.
-    out << cols << ' ' << rows << std::endl;
+    // Q: Should I use '\n' or endl?
+    // A: '\n'. endl is defined as '\n' plus a flush. The flush slows things
+    //    down and is not needed when outputting to a file.
+    //    Source: http://stackoverflow.com/questions/8689344/portable-end-of-line-newline/8689547#8689547
+    out << cols << ' ' << rows << '\n';
     
     for( const auto& val : weights ) {
         // Q: What should setprecision be to not lose any accuracy when printing a double?
         // A: 17. See: http://stackoverflow.com/questions/554063/how-do-i-print-a-double-value-with-full-precision-using-cout
-        out << std::setprecision( 17 ) << val << std::endl;
+        out << std::setprecision( 17 ) << val << '\n';
     }
 }
 #endif
