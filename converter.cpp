@@ -255,6 +255,8 @@ void save_rig( const aiScene* scene, std::vector< aiVector3D >& joints_out, std:
     
     // Save bones_out.
     bones_out.resize( ordered_bones.size() );
+    // We need a reverse map (index to bone name) for saving weights_out.
+    std::unordered_map< std::string, int > bone_name_to_ordered_bones_index;
     {
         int i = 0;
         for( const auto& name : ordered_bones ) {
@@ -264,6 +266,7 @@ void save_rig( const aiScene* scene, std::vector< aiVector3D >& joints_out, std:
                 // end is child
                 joint_name_to_ordered_joints_index[ name ]
                 );
+            bone_name_to_ordered_bones_index[ name ] = i;
             ++i;
         }
     }
@@ -281,6 +284,7 @@ void save_rig( const aiScene* scene, std::vector< aiVector3D >& joints_out, std:
         for( int bone_index = 0; bone_index < mesh->mNumBones; ++bone_index ) {
             const aiBone* bone = mesh->mBones[ bone_index ];
             assert( bone );
+            const std::string bone_name( bone->mName.C_Str() );
             
             // Iterate over the corresponding vertex weights of the bone.
             for( int weight_index = 0; weight_index < bone->mNumWeights; ++weight_index ) {
@@ -291,7 +295,13 @@ void save_rig( const aiScene* scene, std::vector< aiVector3D >& joints_out, std:
                 assert( local_vertex_index < mesh->mNumVertices );
                 assert( local_vertex_index + first_vertex_offset < total_vertex_num );
                 
-                weights_out.at( bone_index*total_vertex_num + first_vertex_offset+local_vertex_index ) = weight.mWeight;
+                // We need to find the global bone index for this bone, using the reverse map.
+                assert( bone_name_to_ordered_bones_index.find( bone_name ) != bone_name_to_ordered_bones_index.end() );
+                const int bones_out_index = bone_name_to_ordered_bones_index[ bone_name ];
+                assert( bones_out_index >= 0 );
+                assert( bones_out_index < bones_out.size() );
+                
+                weights_out.at( bones_out_index*total_vertex_num + first_vertex_offset+local_vertex_index ) = weight.mWeight;
             }
         }
     }
@@ -427,6 +437,8 @@ int main( int argc, char* argv[] )
     const aiScene* scene = aiImportFile( inpath, 0 );
     if( nullptr == scene ) {
         std::cerr << "ERROR: " << aiGetErrorString() << std::endl;
+        usage( argv[0], std::cerr );
+        return -1;
     }
     std::cout << "Loaded: " << inpath << std::endl;
     
@@ -434,6 +446,8 @@ int main( int argc, char* argv[] )
     const aiReturn result = aiExportScene( scene, exportId, outpath, 0 );
     if( aiReturn_SUCCESS != result ) {
         std::cerr << "ERROR: Could not save the scene: " << ( (aiReturn_OUTOFMEMORY == result) ? "Out of memory" : "Unknown reason" ) << std::endl;
+        usage( argv[0], std::cerr );
+        return -1;
     }
     std::cout << "Saved: " << outpath << std::endl;
     
